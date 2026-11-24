@@ -5,9 +5,9 @@ The backend targets Zenoh 1.10.2 and a standalone Redis instance.
 Configuring a redis storage backend in zenoh's config.json5 loads this plugin, and tries 
 to connect to the server, but the actual redis server must already exist and be running.
 
-Not currently supported or tested:
+Not currently supported (both are rejected when a storage is created):
 
-- Redis Cluster 
+- Redis Cluster: the backend does not handle cluster redirects (`MOVED`/`ASK`), scanning a cluster (`SCAN` only covers one node), or `HGET` batching on a cluster.
 - Zenoh storage-manager replication
 
 For simple zenoh clusters, it may be adequate to have just one router provide the storage connection to redis. This plugin also *should* behave with multiple routers accessing the same redis server, so long as all instances sharing that namespace use the same `key_prefix`, `namespace`, `key_expr`, and `strip_prefix` (otherwise stripped-key mappings can conflict). 

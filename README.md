@@ -4,7 +4,7 @@ A storage-manager backend for Eclipse Zenoh 1.10.2 and a standalone Redis instan
 
 The design goal is to allow fast and robust zenoh persistant storage by leveraging Redis as a very performant caching+persistance layer (provided that Redis is configured for persistance). ValKey should work as well, but is untested.
 
-Redis Cluster and Zenoh storage-manager replication are not currently tested, and may have problems.
+Redis Cluster is rejected at storage creation because the backend does not currently handle cluster redirects, scanning a cluster, or HGET batching on a cluster. Zenoh storage-manager replication is also rejected.
 
 ## Build and configure
 
@@ -80,9 +80,9 @@ files can be configured under `tls.private`; see the example.
 
 Config files containing passwords should be protected. 
 
-The Redis account needs permission for INFO, hash, SCAN, DEL and script commands
-used by the backend. A Redis connection and its cluster status are checked
-when each storage is created.
+The Redis account needs permission for INFO, hash, SCAN, DEL, TYPE, EXISTS and
+script commands used by the backend. A Redis connection and its cluster status
+are checked when each storage is created.
 
 The backend expects Redis to use `maxmemory-policy noeviction`. Eviction can
 remove records and cause data loss. That said, the backend does not enforce this setting.
