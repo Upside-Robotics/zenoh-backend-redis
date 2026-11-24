@@ -81,8 +81,9 @@ files can be configured under `tls.private`; see the example.
 Config files containing passwords should be protected. 
 
 The Redis account needs permission for INFO, hash, SCAN, DEL, TYPE, EXISTS and
-script commands used by the backend. A Redis connection and its cluster status
-are checked when each storage is created.
+script commands used by the backend, plus SELECT when using a non-default
+database. A Redis connection and its cluster status are checked when each
+storage is created.
 
 The backend expects Redis to use `maxmemory-policy noeviction`. Eviction can
 remove records and cause data loss. That said, the backend does not enforce this setting.
