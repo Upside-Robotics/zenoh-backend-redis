@@ -2,7 +2,8 @@
 
 The backend targets Zenoh 1.10.2 and a standalone Redis instance. 
 
-Storage volume config sets up Redis server connection. The actual redis server must be seperately managed.
+Configuring a redis storage backend in zenoh's config.json5 loads this plugin, and tries 
+to connect to the server, but the actual redis server must already exist and be running.
 
 Not currently supported or tested:
 
@@ -14,12 +15,10 @@ For simple zenoh clusters, it may be adequate to have just one router provide th
 Each distinct storage must use their own unique prefix/namespace pairs or very weird things will happen. 
 This goes doubly so for prefixes+namespaces that overlap/nest.
 
-Each storage stores the following in redis:
--  one SET of active record keys
-- zero or more hashes containing the full timestamp, payload and encoding
-metadata for each stored record
+Each storage stores zero or more Redis hashes containing the full timestamp,
+payload and encoding metadata for each stored record.
 
-## zenoh uri -> redis key mapping
+## Zenoh uri -> Redis key mapping
 
 Redis names start with `zenoh-redis:v1`, where `v1` identifies the naming
 format. The storage's configured prefix and namespace are escaped separately
@@ -27,11 +26,10 @@ and joined with `:` to build a shared base name. Escaping leaves ASCII letters,
 digits, `-`, `_`, `.`, `~`, and `/` unchanged. Every other UTF-8 byte is
 represented by `%` followed by two uppercase hexadecimal digits. For example,
 `a:b` becomes `a%3Ab`, and `a%3Ab` becomes `a%253Ab`. This also escapes Redis
-glob characters in the prefix and namespace so reconciliation scans only the
+glob characters in the prefix and namespace so discovery scans only match the
 intended storage.
 
-The active-record index is named by adding `:active` to the base. Each stored
-record gets its own name by adding `:entry:` and then either `k` plus the escaped
+Each stored record gets its own name by adding `:entry:` and then either `k` plus the escaped
 stripped key-expression, or `n` when the key is exactly the stripped prefix and
 therefore has no remaining bytes. Escaping the separator and `%` keeps all
 components unambiguous and reversible.
@@ -39,40 +37,33 @@ components unambiguous and reversible.
 ## Atomic updates
 
 Put and delete use a Redis lua script to compare the complete timestamp and change
-the record and active index atomically with respect to other clients.
+the record atomically with respect to other clients.
 
 Timestamps are ordered as big-endian time followed by the ID's native byte
 order, matching Zenoh. Older and equal timestamps are rejected. The scripts
 validate key types before writing, but Redis scripts do not roll back: an
 unexpected server-side failure after a write requires operator investigation.
 
-## Index reconciliation
-
-Startup reconciliation scans the active index and record namespace,
-removing stale members and restoring missing members after partial failures or
-external changes. Repairs are atomic. Before indexing a record, reconciliation
-checks required fields, timestamp ordering and encoding metadata without
-transferring the payload. It can restore discoverability of a complete record,
-but cannot recover lost data or repair a corrupt partial record.
-
-- Startup waits for a complete pass and will print a warning if it takes more than 10 seconds.
-- Redis `SCAN` traverses the database keyspace even with `MATCH`, so the cost
-  grows with the shared database. `COUNT` is a hint, not a hard limit on
-  response size or server time.
-
-There is no periodic reconciliation. Missing index members are not restored by
-a background scan; `get_all_entries` can remove stale members after an atomic
-check.
-
-## Discovery and deletion
+## Discovery & Wildcards
 
 The storage manager uses `get_all_entries` to discover wildcard query and update
-targets. It scans the active index, fetching only timestamps for live records.
-Redis `SSCAN` is not a snapshot, so concurrent updates can appear or disappear
-from an enumeration.
+targets. The backend uses Redis `SCAN` to find record keys and fetches only their
+timestamps. `SCAN` is not a snapshot, so concurrent updates can appear or
+disappear from an enumeration.
 
-There is no backend-managed expiration or tombstone. Deletion removes the record
-and its index member, leaving no timestamp to reject an older put. Timestamp
+Zenoh wildcard requests require listing all storage keys, but Redis must scan every
+key in the database even when matching a prefix. Tens of thousands of entries
+should be practical in typical deployments, but wildcard performance will be
+poor when the database contains millions of keys. Actual latency also depends
+on workload, network and hardware; benchmark representative deployments.
+Redis `COUNT` is a hint, not a hard limit on response size or server time, so wildcard
+queries can also block the entire Redis server, although in practice this should be
+fast enough to not cause issues.
+
+## Deletion
+
+There is no backend-managed expiration or tombstone. Deletion removes the record,
+leaving no timestamp to reject an older put. Timestamp
 comparison therefore protects only live records.
 
 Wildcard puts and deletes do not target deleted keys in a quiescent storage,

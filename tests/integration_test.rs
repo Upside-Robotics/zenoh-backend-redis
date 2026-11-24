@@ -19,7 +19,7 @@ fn key(value: &str) -> Option<OwnedKeyExpr> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn escaped_names_round_trip_and_reconcile(
+async fn escaped_names_round_trip_and_discovery(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
     let token = format!(
@@ -44,7 +44,6 @@ async fn escaped_names_round_trip_and_reconcile(
     let base = format!(
         "zenoh-redis:v1:prefix%3A%2A%3F%5B%5D%5C%25:namespace%3A%2A%3F%5B%5D%5C%25-{token}"
     );
-    let index = format!("{base}:active");
     let cases = [
         (None, "n"),
         (Some("a:b"), "ka%3Ab"),
@@ -69,48 +68,38 @@ async fn escaped_names_round_trip_and_reconcile(
             suffix.as_bytes()
         );
         let entry = format!("{base}:entry:{suffix}");
-        let indexed: bool = connection.sismember(&index, &entry).await?;
-        assert!(indexed, "missing expected Redis entry {entry}");
-        let _: usize = connection.srem(&index, entry).await?;
+        let exists: bool = connection.exists(&entry).await?;
+        assert!(exists, "missing expected Redis entry {entry}");
     }
 
-    assert!(storage.get_all_entries().await?.is_empty());
-    assert_eq!(
-        storage.get(key("a:b"), "").await?[0]
-            .payload
-            .to_bytes()
-            .as_ref(),
-        b"ka%3Ab"
-    );
-    let indexed: bool = connection
-        .sismember(&index, format!("{base}:entry:ka%3Ab"))
-        .await?;
-    assert!(!indexed, "ordinary reads should not restore the index");
-    drop(storage);
-    let repaired = volume.create_storage(config.storages[0].clone()).await?;
-    let entries = repaired.get_all_entries().await?;
+    let other = format!("{base}other:entry:kforeign");
+    let _: () = connection.set(&other, "not a record").await?;
+    let active = format!("{base}:active");
+    let active_exists: bool = connection.exists(&active).await?;
+    assert!(!active_exists, "updates must not create an index");
+    let entries = storage.get_all_entries().await?;
     assert_eq!(entries.len(), cases.len());
-    for (key_text, suffix) in cases {
+    for (key_text, _) in cases {
         let expected = key_text.map(|value| OwnedKeyExpr::try_from(value.to_owned()).unwrap());
         assert!(entries.contains(&(expected, timestamp(10))));
-        let entry = format!("{base}:entry:{suffix}");
-        let indexed: bool = connection.sismember(&index, &entry).await?;
-        assert!(indexed, "reconciliation did not restore {entry}");
     }
-    drop(repaired);
+    drop(storage);
+    let reopened = volume.create_storage(config.storages[0].clone()).await?;
+    assert_eq!(reopened.get_all_entries().await?.len(), cases.len());
+    drop(reopened);
     for (_, suffix) in cases {
         let _: usize = connection.del(format!("{base}:entry:{suffix}")).await?;
     }
-    let _: usize = connection.del(index).await?;
+    let _: usize = connection.del(other).await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn reconciliation_rejects_incomplete_and_invalid_records(
+async fn discovery_scans_ten_thousand_records(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
     let namespace = format!(
-        "repair-{}-{}",
+        "scale-{}-{}",
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
@@ -124,81 +113,36 @@ async fn reconciliation_rejects_incomplete_and_invalid_records(
     let config = PluginConfig::try_from(("storage_manager", &json))?;
     let volume = RedisBackend::start("redis", &config.volumes[0])?;
     let mut storage = volume.create_storage(config.storages[0].clone()).await?;
+    for i in 0..10_000 {
+        storage
+            .put(
+                key(&format!("record/{i}")),
+                ZBytes::from("value"),
+                Encoding::default(),
+                timestamp(10),
+            )
+            .await?;
+    }
+    let entries = storage.get_all_entries().await?;
+    assert_eq!(entries.len(), 10_000);
+    let entries: std::collections::HashSet<_> = entries.into_iter().collect();
+    assert_eq!(entries.len(), 10_000);
+    for i in 0..10_000 {
+        assert!(entries.contains(&(key(&format!("record/{i}")), timestamp(10))));
+    }
+
+    drop(storage);
     let mut connection = redis::Client::open(url.as_str())?
         .get_multiplexed_async_connection()
         .await?;
     let base = format!("zenoh-redis:v1:integration:{namespace}");
-    let entry = format!("{base}:entry:n");
-    let index = format!("{base}:active");
-    storage
-        .put(None, ZBytes::from(""), Encoding::default(), timestamp(10))
-        .await?;
-    drop(storage);
-    let _: usize = connection.srem(&index, &entry).await?;
-
-    for field in [
-        "payload",
-        "encoding_id",
-        "encoding_schema",
-        "has_schema",
-        "order",
-        "timestamp",
-    ] {
-        let value: Vec<u8> = connection.hget(&entry, field).await?;
-        let _: usize = connection.hdel(&entry, field).await?;
-        let error = match volume.create_storage(config.storages[0].clone()).await {
-            Ok(_) => panic!("missing {field} was accepted"),
-            Err(error) => error,
-        };
-        assert!(
-            error.to_string().contains("Redis backend record"),
-            "unexpected error for missing {field}: {error}"
-        );
-        let indexed: bool = connection.sismember(&index, &entry).await?;
-        assert!(!indexed, "record missing {field} was indexed");
-        let _: usize = connection.hset(&entry, field, value).await?;
+    for start in (0..10_000).step_by(128) {
+        let mut pipeline = redis::pipe();
+        for i in start..(start + 128).min(10_000) {
+            pipeline.del(format!("{base}:entry:krecord/{i}")).ignore();
+        }
+        let _: () = pipeline.query_async(&mut connection).await?;
     }
-
-    for (field, invalid) in [
-        ("order", "x".repeat(48)),
-        ("encoding_id", "65536".to_owned()),
-        ("encoding_id", "bad".to_owned()),
-        ("has_schema", "2".to_owned()),
-    ] {
-        let value: Vec<u8> = connection.hget(&entry, field).await?;
-        let _: usize = connection.hset(&entry, field, invalid).await?;
-        assert!(volume
-            .create_storage(config.storages[0].clone())
-            .await
-            .is_err());
-        let indexed: bool = connection.sismember(&index, &entry).await?;
-        assert!(!indexed, "record with invalid {field} was indexed");
-        let _: usize = connection.hset(&entry, field, value).await?;
-    }
-
-    let valid_timestamp: Vec<u8> = connection.hget(&entry, "timestamp").await?;
-    let valid_order: Vec<u8> = connection.hget(&entry, "order").await?;
-    let _: usize = connection.hset(&entry, "timestamp", vec![0u8; 24]).await?;
-    let _: usize = connection.hset(&entry, "order", "0".repeat(48)).await?;
-    assert!(volume
-        .create_storage(config.storages[0].clone())
-        .await
-        .is_err());
-    let _: usize = connection
-        .hset(&entry, "timestamp", valid_timestamp)
-        .await?;
-    let _: usize = connection.hset(&entry, "order", valid_order).await?;
-    let mut repaired = volume.create_storage(config.storages[0].clone()).await?;
-    assert_eq!(
-        repaired.get_all_entries().await?,
-        vec![(None, timestamp(10))]
-    );
-    assert!(repaired.get(None, "").await?[0]
-        .payload
-        .to_bytes()
-        .is_empty());
-    drop(repaired);
-    let _: usize = connection.del(&[entry, index]).await?;
     Ok(())
 }
 
@@ -263,12 +207,10 @@ async fn redis_storage_ordering_discovery_and_recovery(
     assert!(storage.get(None, "_time=now").await.is_err());
     let ttl: i64 = connection.ttl(&none_entry).await?;
     assert_eq!(ttl, -1);
-    let _: usize = connection
-        .srem(format!("{base}:active"), &none_entry)
-        .await?;
-    let repaired = volume.create_storage(config.storages[0].clone()).await?;
-    assert_eq!(repaired.get_all_entries().await?.len(), 1);
-    drop(repaired);
+    assert_eq!(
+        storage.get_all_entries().await?,
+        vec![(None, timestamp(10))]
+    );
     assert!(matches!(
         storage.delete(None, timestamp(11)).await?,
         StorageInsertionResult::Deleted
@@ -340,9 +282,6 @@ async fn redis_storage_ordering_discovery_and_recovery(
         .await?;
     let bad_entry = format!("{base}:entry:kbad");
     let _: usize = connection.hset(&bad_entry, "payload", "incomplete").await?;
-    let _: usize = connection
-        .sadd(format!("{base}:active"), &bad_entry)
-        .await?;
     assert!(storage
         .get_all_entries()
         .await
@@ -360,9 +299,6 @@ async fn redis_storage_ordering_discovery_and_recovery(
     let _: () = connection.set(&bad_entry, "wrong type").await?;
     assert!(storage.get_all_entries().await.is_err());
     let _: usize = connection.del(&bad_entry).await?;
-    let _: usize = connection
-        .srem(format!("{base}:active"), &bad_entry)
-        .await?;
     for i in 0..320 {
         storage
             .put(
@@ -376,10 +312,11 @@ async fn redis_storage_ordering_discovery_and_recovery(
     assert_eq!(storage.get_all_entries().await?.len(), 323);
     drop(storage);
     drop(second);
-    let entries: Vec<String> = connection.smembers(format!("{base}:active")).await?;
-    for entry in entries {
-        let _: usize = connection.del(entry).await?;
+    for suffix in ["n", "krace", "klarge"] {
+        let _: usize = connection.del(format!("{base}:entry:{suffix}")).await?;
     }
-    let _: usize = connection.del(format!("{base}:active")).await?;
+    for i in 0..320 {
+        let _: usize = connection.del(format!("{base}:entry:kmany/{i}")).await?;
+    }
     Ok(())
 }

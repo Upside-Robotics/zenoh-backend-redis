@@ -11,7 +11,7 @@ use crate::{
     config::{StorageOptions, VolumeOptions},
     key_mapper::KeyMapper,
     runtime,
-    storage::{initialize_indexes, RedisStorage},
+    storage::RedisStorage,
 };
 
 pub struct RedisVolume {
@@ -128,7 +128,6 @@ impl Volume for RedisVolume {
         })
         .await?;
         let mapper = KeyMapper::new(&self.prefix, &options.namespace);
-        initialize_indexes(connection.clone(), mapper.clone()).await?;
         Ok(Box::new(RedisStorage::new(connection, mapper, &config)))
     }
 }

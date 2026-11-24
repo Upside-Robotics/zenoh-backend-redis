@@ -1,7 +1,10 @@
-# Zenoh Redis backend
+# Zenoh Redis storage backend
 
-A storage-manager backend for Eclipse Zenoh 1.10.2 and standalone Redis.
-Redis Cluster and Zenoh storage-manager replication are not supported.
+A storage-manager backend for Eclipse Zenoh 1.10.2 and a standalone Redis instance.
+
+The design goal is to allow fast and robust zenoh persistant storage by leveraging Redis as a very performant caching+persistance layer (provided that Redis is configured for persistance). ValKey should work as well, but is untested.
+
+Redis Cluster and Zenoh storage-manager replication are not currently tested, and may have problems.
 
 ## Build and configure
 
@@ -13,90 +16,86 @@ cargo build --release
 ```
 
 Place the resulting `libzenoh_backend_redis` library on the storage-manager
-backend search path, or configure `__path__` on the volume. Start `zenohd`
-with [config/zenoh-redis.json5](config/zenoh-redis.json5) after adjusting the
-address and storage namespace. The router must have
-timestamping enabled. The configuration is JSON5.
+backend search path, or configure `__path__` on the volume. The router must
+have timestamping enabled.
+
+For example, save this configuration as `zenoh-redis.json5`:
+
+```json5
+{
+  plugins: {
+    storage_manager: {
+      volumes: {
+        redis: {
+          url: "redis://127.0.0.1:6379",
+          key_prefix: "zenoh",
+        },
+      },
+      storages: {
+        telemetry: {
+          key_expr: "site1/telemetry/**",
+          strip_prefix: "site1/telemetry",
+          volume: {
+            id: "redis",
+            namespace: "telemetry",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Adjust the Redis address and storage namespace for your deployment, then start
+the router with `zenohd -c zenoh-redis.json5`. See
+[config/zenoh-redis.json5](config/zenoh-redis.json5) for optional authentication
+and TLS settings.
 
 Each logically distinct storage requires a unique `namespace` within its
 volume's `key_prefix`. Router instances intentionally sharing one logical
-storage must use the same namespace and matching settings, as described below.
-Stored values do not expire automatically, and deletes do not leave tombstones.
-An accepted delete removes
-the record and its index entry; a delayed older put can recreate it immediately,
-including after restart. Zenoh's in-memory ordering may reject some delayed
-updates, but the backend does not retain delete history.
-Wildcard discovery returns live keys only; wildcard puts do not select deleted
-keys in a quiescent storage.
-Discovery is not a snapshot, so concurrent deletes can race with wildcard puts.
-The storage manager's wildcard history is not recovered after restart; delayed
+storage must use the same namespace and matching settings. 
+This is not well tested but should work fine.
+
+### Implementation notes:
+
+* Stored values do not expire.
+* An accepted delete removes the record, meaning a delayed older put can recreate it immediately,
+including after restart. 
+* Zenoh's in-memory ordering may reject some delayed updates, but the backend does not retain delete history.
+* Wildcard discovery returns live keys only
+* Wildcard puts do not select deleted keys
+* Concurrent deletes can race with wildcard puts
+* The storage manager's wildcard history is not recovered after restart; delayed
 wildcard operations across restarts are not guaranteed to preserve ordering.
-In Zenoh 1.10.2, a delayed older put overridden by a wildcard delete may
+* In Zenoh 1.10.2, a delayed older put overridden by a wildcard delete may
 instead be stored as an empty value at the delete's timestamp. This is a
 storage-manager issue, tracked upstream in
 [eclipse-zenoh/zenoh#2649](https://github.com/eclipse-zenoh/zenoh/issues/2649).
 
+### Configuration notes:
 The `private` volume object accepts an optional Redis ACL `username` and
 `password`, or a password alone. URLs must not contain credentials. `rediss://`
 uses TLS with system trust roots. Optional PEM CA and client certificate/key
-files can be configured under `tls.private`; see the example. Config files containing passwords must be
-protected: Zenoh's `private` redaction is not encryption. The Redis account
-needs permission for INFO, hash, set, SCAN, SSCAN, DEL and script commands
+files can be configured under `tls.private`; see the example. 
+
+Config files containing passwords should be protected. 
+
+The Redis account needs permission for INFO, hash, SCAN, DEL and script commands
 used by the backend. A Redis connection and its cluster status are checked
 when each storage is created.
 
 The backend expects Redis to use `maxmemory-policy noeviction`. Eviction can
-remove records or their index independently and cause data loss. The backend
-does not enforce this setting.
+remove records and cause data loss. That said, the backend does not enforce this setting.
 
-Do not modify or delete backend keys directly through Redis, including record
-hashes and the active index. Doing so can make records undiscoverable or cause
-data loss; restrict other writers' access to these keys.
+Avoid modifying or delete backend keys directly through Redis, since that is not a tested path for this plugin.
 
 For deployments requiring disk persistence, configure Redis persistence and
 recovery appropriately. Redis may still lose acknowledged data depending on
 persistence and failure settings. The backend advertises volatile persistence
 because it cannot guarantee the server's configuration.
 
-Startup reconciliation scans the shared Redis database keyspace to completion
-before storage becomes available; it logs a warning if the scan takes longer
-than 10 seconds. There is no periodic reconciliation, so missing index entries
-are not restored by a background scan during operation.
-
-## Simple clusters: shared Redis
-
-For a simple Zenoh cluster that needs shared queryable storage, the recommended
-starting topology is a **single active storage-manager writer** connected to a
-shared standalone Redis service, rather than Zenoh storage-manager replication.
-A standby router can use the same Redis data after failover. Use external leader
-election and fencing to prevent multiple active writers; this backend does not
-provide either mechanism. Keep storage-manager `replication` disabled.
-
-Configure every router serving the same logical storage with the same Redis
-server and database, `key_prefix`, `namespace`, `key_expr`, and `strip_prefix`.
-Use a Redis address
-reachable from every router, not `127.0.0.1` unless Redis is local to each.
-Reserve a different prefix/namespace pair for each distinct logical storage.
-The backend maps stripped keys into the shared namespace; mismatched
-`strip_prefix` or storage expressions can cause keys to collide.
-
-Shared Redis is not equivalent to independent storage replication or high
-availability. All routers depend on Redis availability, persistence, recovery,
-and network connectivity. The backend has no replay queue for writes missed
-during an outage. A Redis write does not itself publish a Zenoh sample on other
-routers; Zenoh still distributes live publications. Deletes leave no durable
-ordering record, so delayed older writes can resurrect a deleted key.
-
-Multiple simultaneous storage-manager writers to one namespace are
-**experimental and not validated as a cluster topology**. Per-key Redis updates
-are atomic, but each storage manager keeps its own wildcard and latest-update
-state. Out-of-order delivery, missed events, restarts, and wildcard updates can
-produce different decisions; wildcard scans are not snapshots. Prefer
-concrete-key puts and deletes, and test failover, partitions, delayed updates,
-wildcard behavior, and Redis outages against the actual deployment before
-relying on concurrent writers. If stronger availability or consistency is
-required, use a separately validated architecture rather than treating shared
-Redis as a substitute for replicated Zenoh storage.
+Wildcard discovery scans the Redis database keyspace; see
+[DESIGN.md](DESIGN.md) for performance considerations.
 
 ## Testing
 

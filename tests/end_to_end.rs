@@ -252,15 +252,12 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     drop(router);
     fs::remove_file(config_file)?;
 
-    for index in [format!("{base}:active")] {
-        let members: Vec<String> = redis::cmd("SMEMBERS")
-            .arg(&index)
-            .query_async(&mut conn)
-            .await?;
-        for member in members {
-            let _: usize = redis::cmd("DEL").arg(member).query_async(&mut conn).await?;
-        }
-        let _: usize = redis::cmd("DEL").arg(index).query_async(&mut conn).await?;
-    }
+    let _: usize = redis::cmd("DEL")
+        .arg(format!("{base}:entry:n"))
+        .arg(format!("{base}:entry:ka"))
+        .arg(format!("{base}:entry:ka/b"))
+        .arg(format!("{base}:entry:kc"))
+        .query_async(&mut conn)
+        .await?;
     Ok(())
 }

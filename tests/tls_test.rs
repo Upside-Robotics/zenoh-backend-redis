@@ -66,7 +66,6 @@ async fn authenticated_tls_connection() -> Result<(), Box<dyn std::error::Error 
     let base = format!("zenoh-redis:v1:tls-test:{namespace}");
     let _: usize = redis::cmd("DEL")
         .arg(format!("{base}:entry:n"))
-        .arg(format!("{base}:active"))
         .query_async(&mut connection)
         .await?;
     Ok(())

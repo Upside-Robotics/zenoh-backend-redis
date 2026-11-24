@@ -74,10 +74,6 @@ impl KeyMapper {
         }
     }
 
-    pub fn active(&self) -> String {
-        format!("{}:active", self.base)
-    }
-
     pub fn entries_pattern(&self) -> String {
         format!("{}:entry:*", self.base)
     }
@@ -112,7 +108,6 @@ mod tests {
         let m = KeyMapper::new("x:%", "one:two");
         let other = KeyMapper::new("x", "%:one:two");
         let key = OwnedKeyExpr::try_from("a/b%3A".to_owned()).unwrap();
-        assert_eq!(m.active(), "zenoh-redis:v1:x%3A%25:one%3Atwo:active");
         assert_eq!(
             m.entry(Some(&key)),
             "zenoh-redis:v1:x%3A%25:one%3Atwo:entry:ka/b%253A"
@@ -120,7 +115,7 @@ mod tests {
         assert_eq!(m.entry(None), "zenoh-redis:v1:x%3A%25:one%3Atwo:entry:n");
         assert_eq!(m.decode(&m.entry(None)).unwrap(), None);
         assert_eq!(m.decode(&m.entry(Some(&key))).unwrap(), Some(key));
-        assert_ne!(m.active(), other.active());
+        assert_ne!(m.entries_pattern(), other.entries_pattern());
         assert!(other.decode(&m.entry(None)).is_err());
         for suffix in ["k%", "k%2", "k%3a", "k%GG", "k%41", "k:", "k", "x"] {
             assert!(m.decode(&format!("{}:entry:{suffix}", m.base)).is_err());
