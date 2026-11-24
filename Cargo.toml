@@ -1,0 +1,33 @@
+[package]
+name = "zenoh-backend-redis"
+version = "1.10.2"
+edition = "2021"
+license = "EPL-2.0 OR Apache-2.0"
+description = "Standalone Redis storage backend for Eclipse Zenoh"
+
+[lib]
+name = "zenoh_backend_redis"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["dynamic_plugin"]
+dynamic_plugin = []
+stats = ["zenoh/stats"]
+
+[dependencies]
+async-trait = "0.1"
+redis = { version = "0.32", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp", "script"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
+tracing = "0.1"
+zenoh = { version = "=1.10.2", features = ["unstable", "internal", "plugins"] }
+zenoh_backend_traits = "=1.10.2"
+zenoh-plugin-trait = "=1.10.2"
+zenoh-util = "=1.10.2"
+
+[build-dependencies]
+rustc_version = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "process"] }

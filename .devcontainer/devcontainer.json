@@ -1,0 +1,13 @@
+{
+  "name": "zenoh-backend-redis",
+  "image": "rust:1.97.1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  },
+  "postCreateCommand": "rustup component add rustfmt clippy"
+}

@@ -1,0 +1,32 @@
+{
+  plugins: {
+    storage_manager: {
+      volumes: {
+        redis: {
+          url: "redis://127.0.0.1:6379",
+          key_prefix: "zenoh",
+          // private: { username: "<REDIS_USERNAME>", password: "<REDIS_PASSWORD>" },
+          // With a rediss:// URL, optional PEM certificate files:
+          // tls: { private: {
+          //   root_ca_certificate_file: "/path/to/ca.pem",
+          //   client_certificate_file: "/path/to/client.pem",
+          //   client_private_key_file: "/path/to/client-key.pem",
+          // } },
+        },
+      },
+      storages: {
+        telemetry: {
+          key_expr: "site1/telemetry/**",
+          strip_prefix: "site1/telemetry",
+          volume: {
+            id: "redis",
+            namespace: "telemetry",
+            tombstone_ttl_seconds: 86400,
+            // ttl_seconds: 86400,
+            // cleanup_interval_seconds: 60,
+          },
+        },
+      },
+    },
+  },
+}
