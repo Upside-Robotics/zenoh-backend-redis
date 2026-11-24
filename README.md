@@ -9,7 +9,8 @@ Redis Cluster is rejected at storage creation because the backend does not curre
 ## Build and configure
 
 Build using the exact Rust toolchain and Zenoh versions used to build the
-target router and storage-manager plugin:
+target router and storage-manager plugin. The default build uses the pinned
+Rust toolchain and matches the official Zenoh 1.10.2 Debian packages:
 
 ```sh
 cargo build --release
