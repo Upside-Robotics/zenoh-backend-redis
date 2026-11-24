@@ -2,7 +2,7 @@
 name = "zenoh-backend-redis"
 version = "1.10.2"
 edition = "2021"
-license = "EPL-2.0 OR Apache-2.0"
+license = "Apache-2.0"
 description = "Standalone Redis storage backend for Eclipse Zenoh"
 
 [lib]

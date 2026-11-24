@@ -1,5 +1,11 @@
 # Zenoh Redis storage backend
 
+## License
+
+This project is licensed under the Apache License, Version 2.0.
+
+Copyright 2026 Upside Robotics
+
 A storage-manager backend for Eclipse Zenoh 1.10.2 and a standalone Redis instance.
 
 The design goal is to allow fast and robust zenoh persistant storage by leveraging Redis as a very performant caching+persistance layer (provided that Redis is configured for persistance). ValKey should work as well, but is untested.
