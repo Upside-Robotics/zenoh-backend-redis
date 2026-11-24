@@ -8,29 +8,29 @@ For simple clusters, the recommended starting topology is one fenced active
 storage-manager writer and a standby using the same standalone Redis database
 and logical storage namespace. Leader election and fencing are external
 responsibilities. All instances sharing that namespace must use the same
-`key_prefix`, `namespace`, `key_expr`, `strip_prefix`, and retention settings;
-otherwise stripped-key mappings or expiry behavior can conflict. Distinct
+`key_prefix`, `namespace`, `key_expr`, and `strip_prefix`;
+otherwise stripped-key mappings can conflict. Distinct
 logical storages must use distinct prefix/namespace pairs.
 
 Redis is shared state, not independent Zenoh storage replication: its
 availability and persistence are common dependencies, it does not replay
-missed writes or publish Zenoh samples on behalf of other routers, and finite
-tombstone retention permits eventual resurrection of older updates. Multiple
+missed writes or publish Zenoh samples on behalf of other routers. Deletes have
+no tombstone, so delayed older writes can immediately resurrect values. Multiple
 simultaneous storage managers sharing a namespace are experimental and not
 validated as a cluster topology. Their in-memory wildcard and latest-update
 state is not shared, even though individual Redis mutations are atomic.
 Wildcard behavior, partitions, restarts, and concurrent writers require
 deployment-specific testing.
 
-Each storage has two sets, of active record keys and retained tombstone keys.
-Each record is a hash containing a kind, full timestamp, and, for live records,
-payload and encoding metadata. Names are versioned and hex-encode namespace
+Each storage has one set of active record keys.
+Each record is a hash containing the full timestamp, payload and encoding
+metadata. Names are versioned and hex-encode namespace
 components and stripped key-expression bytes; the exact stripped prefix uses a
 distinct representation. This separates keys, indexes and storages without
 delimiter collisions.
 
 Put and delete use a Redis script to compare the complete timestamp and change
-the record, TTL and both indexes atomically with respect to other clients.
+the record and active index atomically with respect to other clients.
 Timestamp ordering uses big-endian time followed by the ID's native byte order,
 matching Zenoh's timestamp ordering. Older and equal timestamps are rejected.
 Scripts validate key types before writes. Redis scripts are not rollback
@@ -48,26 +48,23 @@ but cannot recover data lost by Redis or repair a corrupt partial record.
 Redis SCAN traverses the database keyspace even with MATCH, so reconciliation
 cost grows with the shared database; the interval should be sized accordingly.
 
-Deletion replaces the value with a finite-TTL tombstone. During its lifetime,
-older updates cannot resurrect it. After expiration that guarantee is lost.
-Live values can also have a TTL. Redis does not expire set members, so reads
-and a periodic background scan remove stale members after an atomic check.
+There is no backend-managed expiration or tombstone. Deletion removes the
+record and its index member; after that, no stored timestamp remains to reject
+an older put. Atomic timestamp comparison protects only currently live records.
+Reads and periodic reconciliation remove stale members after an atomic check,
+and repair missing index members after partial failures or external changes.
 SSCAN is not a snapshot; concurrent updates may appear or disappear from an
 enumeration. The storage-manager uses `get_all_entries` to discover wildcard
-query and update targets. It scans the active index, fetches only record kind
-and timestamp metadata, and returns only live records, including when a stale
-active-index member now refers to a tombstone.
-Wildcard puts and deletes therefore do not target retained tombstones in a
-quiescent storage; a newer concrete-key put can still replace a tombstone.
+query and update targets. It scans the active index, fetches only timestamps,
+and returns live records. Wildcard puts and deletes do not target deleted keys
+in a quiescent storage; a concrete-key put can recreate a deleted key.
 Discovery and subsequent updates are not atomic, so a concurrent delete after
 discovery can still race with a wildcard put.
 
 Zenoh 1.10.2 reconstructs every stored entry as a put when it initializes its
-replication state; its backend trait cannot report a tombstone's kind. Excluding
-tombstones avoids reconstructing them as puts, but also means that the storage
-manager cannot recover or propagate their delete events after restart. The
-backend still rejects replication. Redis retains tombstones independently of
-discovery and compares concrete-key updates against them until they expire.
+replication state. Because deletes have no durable representation, the storage
+manager cannot recover or propagate delete events after restart. The backend
+still rejects replication.
 The storage manager's in-memory wildcard history is not persisted by the
 backend, so delayed wildcard operations across restarts are not guaranteed to
 preserve their original ordering.

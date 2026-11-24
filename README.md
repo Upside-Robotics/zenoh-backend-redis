@@ -15,19 +15,19 @@ cargo build --release
 Place the resulting `libzenoh_backend_redis` library on the storage-manager
 backend search path, or configure `__path__` on the volume. Start `zenohd`
 with [config/zenoh-redis.json5](config/zenoh-redis.json5) after adjusting the
-address, storage namespace and tombstone retention. The router must have
+address and storage namespace. The router must have
 timestamping enabled. The configuration is JSON5.
 
 Each logically distinct storage requires a unique `namespace` within its
 volume's `key_prefix`. Router instances intentionally sharing one logical
 storage must use the same namespace and matching settings, as described below.
-`tombstone_ttl_seconds` is required and must be positive; choose it to exceed
-the expected delivery and recovery delays. `ttl_seconds` optionally expires
-live values. `cleanup_interval_seconds` defaults to 60 seconds. TTLs are
-reset on accepted updates. Expired values are absent, and expired tombstones
-no longer prevent older writes from resurrecting deleted keys.
-Wildcard discovery returns live keys only: wildcard puts do not recreate
-retained tombstones in a quiescent storage, while a newer concrete-key put can.
+`cleanup_interval_seconds` defaults to 60 seconds. Stored values do not expire
+automatically, and deletes do not leave tombstones. An accepted delete removes
+the record and its index entry; a delayed older put can recreate it immediately,
+including after restart. Zenoh's in-memory ordering may reject some delayed
+updates, but the backend does not retain delete history.
+Wildcard discovery returns live keys only; wildcard puts do not select deleted
+keys in a quiescent storage.
 Discovery is not a snapshot, so concurrent deletes can race with wildcard puts.
 The storage manager's wildcard history is not recovered after restart; delayed
 wildcard operations across restarts are not guaranteed to preserve ordering.
@@ -37,7 +37,7 @@ The `private` volume object accepts an optional Redis ACL `username` and
 uses TLS with system trust roots. Optional PEM CA and client certificate/key
 files can be configured under `tls.private`; see the example. Config files containing passwords must be
 protected: Zenoh's `private` redaction is not encryption. The Redis account
-needs permission for INFO, hash, set, SCAN, SSCAN, expiration and script commands
+needs permission for INFO, hash, set, SCAN, SSCAN, DEL and script commands
 used by the backend. A Redis connection and its cluster status are checked
 when each storage is created.
 
@@ -45,7 +45,7 @@ For deployments requiring disk persistence, configure Redis persistence and
 recovery appropriately and use `maxmemory-policy noeviction`. Redis may
 still lose acknowledged data depending on persistence and failure settings.
 The backend advertises volatile persistence because it cannot guarantee the
-server's configuration; live TTL intentionally limits retention. Restrict
+server's configuration. Restrict
 other writers' access to the backend's keys. Startup reconciliation scans the
 shared Redis database keyspace to completion before storage becomes available;
 it logs a warning if the scan takes longer than 10 seconds. Periodic
@@ -67,7 +67,7 @@ provide either mechanism. Keep storage-manager `replication` disabled.
 
 Configure every router serving the same logical storage with the same Redis
 server and database, `key_prefix`, `namespace`, `key_expr`, `strip_prefix`,
-live TTL, tombstone TTL, and compatible cleanup settings. Use a Redis address
+and compatible cleanup settings. Use a Redis address
 reachable from every router, not `127.0.0.1` unless Redis is local to each.
 Reserve a different prefix/namespace pair for each distinct logical storage.
 The backend maps stripped keys into the shared namespace; mismatched
@@ -77,8 +77,8 @@ Shared Redis is not equivalent to independent storage replication or high
 availability. All routers depend on Redis availability, persistence, recovery,
 and network connectivity. The backend has no replay queue for writes missed
 during an outage. A Redis write does not itself publish a Zenoh sample on other
-routers; Zenoh still distributes live publications. Retained tombstones reject
-older per-key writes only until their TTL expires.
+routers; Zenoh still distributes live publications. Deletes leave no durable
+ordering record, so delayed older writes can resurrect a deleted key.
 
 Multiple simultaneous storage-manager writers to one namespace are
 **experimental and not validated as a cluster topology**. Per-key Redis updates

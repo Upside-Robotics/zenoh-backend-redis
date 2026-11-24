@@ -28,7 +28,7 @@ async fn authenticated_tls_connection() -> Result<(), Box<dyn std::error::Error 
         }},
         "storages": {"test": {
             "key_expr": "test/**", "strip_prefix": "test",
-            "volume": {"id": "redis", "namespace": namespace, "tombstone_ttl_seconds": 10}
+            "volume": {"id": "redis", "namespace": namespace}
         }}
     });
     let config = PluginConfig::try_from(("storage_manager", &json))?;
@@ -68,7 +68,6 @@ async fn authenticated_tls_connection() -> Result<(), Box<dyn std::error::Error 
     let _: usize = redis::cmd("DEL")
         .arg(format!("{base}:entry:n"))
         .arg(format!("{base}:active"))
-        .arg(format!("{base}:tombstones"))
         .query_async(&mut connection)
         .await?;
     Ok(())

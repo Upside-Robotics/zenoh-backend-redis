@@ -110,7 +110,7 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
                 "volumes": {"redis": {"__required__": true, "__path__": [backend], "url": redis_url, "key_prefix": "e2e"}},
                 "storages": {"test": {
                     "key_expr": format!("{root}/**"), "strip_prefix": root,
-                    "volume": {"id": "redis", "namespace": token, "tombstone_ttl_seconds": 10}
+                    "volume": {"id": "redis", "namespace": token}
                 }}
             }
         }
@@ -181,8 +181,8 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     }
     assert!(updated, "wildcard put did not update live target");
     assert!(!query(&session, &first).await?.contains_key(&first));
-    let kind: Option<String> = conn.hget(&first_entry, "kind").await?;
-    assert_eq!(kind.as_deref(), Some("tombstone"));
+    let exists: bool = conn.exists(&first_entry).await?;
+    assert!(!exists);
     drop(session);
     drop(router);
     let mut router = start_router(&binary, &config_file)?;
@@ -211,9 +211,8 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
         "wildcard put did not update live target after restart"
     );
     assert!(!query(&session, &first).await?.contains_key(&first));
-    let kind: Option<String> = conn.hget(&first_entry, "kind").await?;
-    assert_eq!(kind.as_deref(), Some("tombstone"));
-    let delete_timestamp: Vec<u8> = conn.hget(&first_entry, "timestamp").await?;
+    let exists: bool = conn.exists(&first_entry).await?;
+    assert!(!exists);
     session.delete(format!("{root}/*")).await?;
     for _ in 0..20 {
         if !query(&session, &sibling).await?.contains_key(&sibling) {
@@ -223,47 +222,38 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     }
     assert!(!query(&session, &sibling).await?.contains_key(&sibling));
     assert!(!query(&session, &first).await?.contains_key(&first));
-    let timestamp_after_wildcard_delete: Vec<u8> = conn.hget(&first_entry, "timestamp").await?;
-    assert_eq!(
-        timestamp_after_wildcard_delete, delete_timestamp,
-        "wildcard delete must not update a retained tombstone"
-    );
+    let exists: bool = conn.exists(&first_entry).await?;
+    assert!(!exists);
     assert_eq!(
         query(&session, &second).await?.get(&second),
         Some(&b"second".to_vec())
     );
-    tokio::time::sleep(Duration::from_millis(10500)).await;
-    let kind: Option<String> = conn.hget(&first_entry, "kind").await?;
-    assert_eq!(kind, None, "tombstone should have expired");
-    session.put(sibling.as_str(), "after-expiry-live").await?;
+    session.put(sibling.as_str(), "restored").await?;
     let mut sibling_ready = false;
     for _ in 0..20 {
-        if query(&session, &sibling).await?.get(&sibling) == Some(&b"after-expiry-live".to_vec()) {
+        if query(&session, &sibling).await?.get(&sibling) == Some(&b"restored".to_vec()) {
             sibling_ready = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(sibling_ready, "live wildcard target was not restored");
-    session.put(format!("{root}/*"), "after-expiry").await?;
+    session.put(format!("{root}/*"), "after-restore").await?;
     let mut updated = false;
     for _ in 0..20 {
-        if query(&session, &sibling).await?.get(&sibling) == Some(&b"after-expiry".to_vec()) {
+        if query(&session, &sibling).await?.get(&sibling) == Some(&b"after-restore".to_vec()) {
             updated = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(
-        updated,
-        "wildcard put did not update live target after expiry"
-    );
+    assert!(updated, "wildcard put did not update restored live target");
     assert!(!query(&session, &first).await?.contains_key(&first));
     drop(session);
     drop(router);
     fs::remove_file(config_file)?;
 
-    for index in [format!("{base}:active"), format!("{base}:tombstones")] {
+    for index in [format!("{base}:active")] {
         let members: Vec<String> = redis::cmd("SMEMBERS")
             .arg(&index)
             .query_async(&mut conn)

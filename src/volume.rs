@@ -101,7 +101,10 @@ impl Volume for RedisVolume {
 
     async fn create_storage(&self, config: StorageConfig) -> Result<Box<dyn Storage>> {
         if config.replication.is_some() {
-            return Err("Zenoh storage-manager replication is unsupported: deleted entries cannot be restored as delete events on restart".into());
+            return Err(
+                "Zenoh storage-manager replication is unsupported: delete events are not retained"
+                    .into(),
+            );
         }
         let options: StorageOptions =
             serde_json::from_value(config.volume_cfg.clone().into_serde_value())?;

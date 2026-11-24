@@ -42,8 +42,6 @@ fn default_prefix() -> String {
 #[serde(deny_unknown_fields)]
 pub struct StorageOptions {
     pub namespace: String,
-    pub ttl_seconds: Option<u64>,
-    pub tombstone_ttl_seconds: u64,
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval_seconds: u64,
 }
@@ -86,15 +84,8 @@ impl StorageOptions {
         if self.namespace.is_empty() {
             return Err("storage namespace must not be empty".into());
         }
-        if self.tombstone_ttl_seconds == 0
-            || self.tombstone_ttl_seconds > u32::MAX as u64
-            || self
-                .ttl_seconds
-                .is_some_and(|ttl| ttl == 0 || ttl > u32::MAX as u64)
-            || self.cleanup_interval_seconds == 0
-            || self.cleanup_interval_seconds > u32::MAX as u64
-        {
-            return Err("TTL and cleanup intervals must be positive and fit in u32".into());
+        if self.cleanup_interval_seconds == 0 || self.cleanup_interval_seconds > u32::MAX as u64 {
+            return Err("cleanup interval must be positive and fit in u32".into());
         }
         Ok(())
     }
@@ -129,20 +120,20 @@ mod tests {
     #[test]
     fn validates_storage_settings() {
         let valid: StorageOptions = serde_json::from_value(serde_json::json!({
-            "namespace": "x", "tombstone_ttl_seconds": 1
+            "namespace": "x"
         }))
         .unwrap();
         assert!(valid.validate().is_ok());
         for value in [
-            serde_json::json!({"namespace": "", "tombstone_ttl_seconds": 1}),
-            serde_json::json!({"namespace": "x", "tombstone_ttl_seconds": 0}),
-            serde_json::json!({"namespace": "x", "tombstone_ttl_seconds": 1, "ttl_seconds": 0}),
-            serde_json::json!({"namespace": "x", "tombstone_ttl_seconds": 1, "cleanup_interval_seconds": 0}),
+            serde_json::json!({"namespace": ""}),
+            serde_json::json!({"namespace": "x", "cleanup_interval_seconds": 0}),
         ] {
             assert!(serde_json::from_value::<StorageOptions>(value)
                 .unwrap()
                 .validate()
                 .is_err());
         }
+        let unknown = serde_json::json!({"namespace": "x", "unsupported_option": 1});
+        assert!(serde_json::from_value::<StorageOptions>(unknown).is_err());
     }
 }

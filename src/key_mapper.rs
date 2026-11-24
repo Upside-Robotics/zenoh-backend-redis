@@ -49,10 +49,6 @@ impl KeyMapper {
         format!("{}:active", self.base)
     }
 
-    pub fn tombstones(&self) -> String {
-        format!("{}:tombstones", self.base)
-    }
-
     pub fn entries_pattern(&self) -> String {
         format!("{}:entry:*", self.base)
     }

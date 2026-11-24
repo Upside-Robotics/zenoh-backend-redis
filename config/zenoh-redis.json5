@@ -21,8 +21,6 @@
           volume: {
             id: "redis",
             namespace: "telemetry",
-            tombstone_ttl_seconds: 86400,
-            // ttl_seconds: 86400,
             // cleanup_interval_seconds: 60,
           },
         },

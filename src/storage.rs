@@ -28,13 +28,11 @@ const PIPELINE_SIZE: usize = 128;
 const RECONCILE_BUDGET: usize = 256;
 const STARTUP_WARNING_AFTER: Duration = Duration::from_secs(10);
 type Record = HashMap<String, Vec<u8>>;
-type Metadata = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 #[derive(Clone)]
 struct State {
     connection: ConnectionManager,
     mapper: KeyMapper,
-    options: StorageOptions,
 }
 
 pub struct RedisStorage {
@@ -70,11 +68,7 @@ impl RedisStorage {
             }
         })?;
         Ok(Self {
-            state: State {
-                connection,
-                mapper,
-                options,
-            },
+            state: State { connection, mapper },
             status: config.to_json_value(),
             cleanup,
         })
@@ -89,32 +83,23 @@ impl State {
         value: Option<(ZBytes, Encoding)>,
     ) -> Result<StorageInsertionResult> {
         let bytes = codec::timestamp_bytes(&timestamp);
-        let (kind, payload, id, has_schema, schema, ttl) = match value {
+        let (kind, payload, id, has_schema, schema) = match value {
             Some((payload, encoding)) => {
                 let (id, has_schema, schema) = codec::encoding_parts(&encoding);
                 (
-                    "live",
+                    "put",
                     payload.to_bytes().into_owned(),
                     id,
                     has_schema,
                     schema,
-                    self.options.ttl_seconds.unwrap_or(0),
                 )
             }
-            None => (
-                "tombstone",
-                Vec::new(),
-                0,
-                false,
-                Vec::new(),
-                self.options.tombstone_ttl_seconds,
-            ),
+            None => ("delete", Vec::new(), 0, false, Vec::new()),
         };
         let entry = self.mapper.entry(key.as_ref());
         let result: i32 = Script::new(include_str!("update.lua"))
             .key(entry)
             .key(self.mapper.active())
-            .key(self.mapper.tombstones())
             .arg(hex(&bytes))
             .arg(kind)
             .arg(bytes)
@@ -122,7 +107,6 @@ impl State {
             .arg(id)
             .arg(schema)
             .arg(if has_schema { 1 } else { 0 })
-            .arg(ttl)
             .invoke_async(&mut self.connection)
             .await?;
         match result {
@@ -152,20 +136,9 @@ fn record_timestamp(record: &Record) -> Result<Timestamp> {
     codec::timestamp_from_bytes(field(record, "timestamp")?)
 }
 
-fn record_kind(record: &Record) -> Result<&[u8]> {
-    validate_kind(field(record, "kind")?)
-}
-
-fn validate_kind(kind: &[u8]) -> Result<&[u8]> {
-    if kind != b"live" && kind != b"tombstone" {
-        return Err("invalid Redis record kind".into());
-    }
-    Ok(kind)
-}
-
 fn metadata_command(key: &str) -> redis::Cmd {
-    let mut command = redis::cmd("HMGET");
-    command.arg(key).arg("kind").arg("timestamp");
+    let mut command = redis::cmd("HGET");
+    command.arg(key).arg("timestamp");
     command
 }
 
@@ -189,16 +162,10 @@ async fn scan_index(connection: &mut ConnectionManager, index: &str) -> Result<H
     Ok(keys)
 }
 
-async fn clean_member(
-    connection: &mut ConnectionManager,
-    index: &str,
-    key: &str,
-    kind: &str,
-) -> Result<()> {
+async fn clean_member(connection: &mut ConnectionManager, index: &str, key: &str) -> Result<()> {
     let _: i64 = Script::new(include_str!("cleanup.lua"))
         .key(key)
         .key(index)
-        .arg(kind)
         .invoke_async(connection)
         .await?;
     Ok(())
@@ -208,7 +175,6 @@ async fn clean_member(
 enum ReconcilePhase {
     #[default]
     Active,
-    Tombstones,
     Records,
 }
 
@@ -234,16 +200,12 @@ impl Reconciliation {
                 mapper.decode(&key)?;
                 match self.phase {
                     ReconcilePhase::Active => {
-                        clean_member(connection, &mapper.active(), &key, "live").await?
-                    }
-                    ReconcilePhase::Tombstones => {
-                        clean_member(connection, &mapper.tombstones(), &key, "tombstone").await?
+                        clean_member(connection, &mapper.active(), &key).await?
                     }
                     ReconcilePhase::Records => {
                         let _: i64 = Script::new(include_str!("repair.lua"))
                             .key(&key)
                             .key(mapper.active())
-                            .key(mapper.tombstones())
                             .invoke_async(connection)
                             .await?;
                     }
@@ -254,8 +216,7 @@ impl Reconciliation {
             if self.page_loaded && self.cursor == 0 {
                 self.page_loaded = false;
                 self.phase = match self.phase {
-                    ReconcilePhase::Active => ReconcilePhase::Tombstones,
-                    ReconcilePhase::Tombstones => ReconcilePhase::Records,
+                    ReconcilePhase::Active => ReconcilePhase::Records,
                     ReconcilePhase::Records => {
                         self.phase = ReconcilePhase::Active;
                         return Ok((work, true));
@@ -263,12 +224,9 @@ impl Reconciliation {
                 };
             }
             let mut command = match self.phase {
-                ReconcilePhase::Active | ReconcilePhase::Tombstones => {
+                ReconcilePhase::Active => {
                     let mut command = redis::cmd("SSCAN");
-                    command.arg(match self.phase {
-                        ReconcilePhase::Active => mapper.active(),
-                        _ => mapper.tombstones(),
-                    });
+                    command.arg(mapper.active());
                     command.arg(self.cursor);
                     command
                 }
@@ -388,7 +346,7 @@ impl Storage for RedisStorage {
                 .connection
                 .hgetall(state.mapper.entry(key.as_ref()))
                 .await?;
-            if record.is_empty() || record_kind(&record)? == b"tombstone" {
+            if record.is_empty() {
                 return Ok(Vec::new());
             }
             let id = std::str::from_utf8(field(&record, "encoding_id")?)?.parse::<u16>()?;
@@ -423,34 +381,20 @@ impl Storage for RedisStorage {
                     state.mapper.decode(key)?;
                     pipeline.add_command(metadata_command(key));
                 }
-                let records: Vec<Metadata> = pipeline.query_async(&mut connection).await?;
-                for (key, (mut kind, mut timestamp)) in batch.iter().zip(records) {
-                    if kind.is_none() && timestamp.is_none() {
-                        // Distinguish an expired key from a corrupt hash in one atomic recheck.
-                        let (exists, current_kind, current_timestamp): (bool, _, _) =
+                let records: Vec<Option<Vec<u8>>> = pipeline.query_async(&mut connection).await?;
+                for (key, mut timestamp) in batch.iter().zip(records) {
+                    if timestamp.is_none() {
+                        // Distinguish a deleted key from a corrupt hash in one atomic recheck.
+                        let (exists, current_timestamp): (bool, Option<Vec<u8>>) =
                             Script::new(include_str!("metadata.lua"))
                                 .key(key)
                                 .invoke_async(&mut connection)
                                 .await?;
                         if !exists {
-                            clean_member(&mut connection, &state.mapper.active(), key, "live")
-                                .await?;
-                            clean_member(
-                                &mut connection,
-                                &state.mapper.tombstones(),
-                                key,
-                                "tombstone",
-                            )
-                            .await?;
+                            clean_member(&mut connection, &state.mapper.active(), key).await?;
                             continue;
                         }
-                        kind = current_kind;
                         timestamp = current_timestamp;
-                    }
-                    let kind = kind.ok_or("Redis record missing field kind")?;
-                    if validate_kind(&kind)? == b"tombstone" {
-                        clean_member(&mut connection, &state.mapper.active(), key, "live").await?;
-                        continue;
                     }
                     let timestamp = timestamp.ok_or("Redis record missing field timestamp")?;
                     entries.push((
@@ -477,7 +421,7 @@ mod tests {
     fn discovery_requests_only_required_metadata() {
         assert_eq!(
             metadata_command("example").get_packed_command(),
-            b"*4\r\n$5\r\nHMGET\r\n$7\r\nexample\r\n$4\r\nkind\r\n$9\r\ntimestamp\r\n"
+            b"*3\r\n$4\r\nHGET\r\n$7\r\nexample\r\n$9\r\ntimestamp\r\n"
         );
     }
 
@@ -519,15 +463,9 @@ mod tests {
                 .sadd(mapper.active(), mapper.entry(Some(&key)))
                 .await?;
         }
-        let stale_tombstone = mapper.entry(Some(&OwnedKeyExpr::try_from("stale/tombstone")?));
-        let _: usize = connection
-            .sadd(mapper.tombstones(), &stale_tombstone)
-            .await?;
         let orphan = mapper.entry(Some(&OwnedKeyExpr::try_from("orphan")?));
         let _: () = redis::cmd("HSET")
             .arg(&orphan)
-            .arg("kind")
-            .arg("live")
             .arg("order")
             .arg("0".repeat(48))
             .arg("timestamp")
@@ -543,8 +481,6 @@ mod tests {
         let recreated = progress.pending.front().unwrap().clone();
         let _: () = redis::cmd("HSET")
             .arg(&recreated)
-            .arg("kind")
-            .arg("live")
             .arg("order")
             .arg("0".repeat(48))
             .arg("timestamp")
@@ -565,11 +501,8 @@ mod tests {
         assert!(cycles > 8, "all members must be charged to the budget");
         let members: HashSet<String> = connection.smembers(mapper.active()).await?;
         assert_eq!(members, HashSet::from([recreated.clone(), orphan.clone()]));
-        let tombstones: Vec<String> = connection.smembers(mapper.tombstones()).await?;
-        assert!(tombstones.is_empty());
-
         let _: usize = connection
-            .del(&[recreated, orphan, mapper.active(), mapper.tombstones()])
+            .del(&[recreated, orphan, mapper.active()])
             .await?;
         Ok(())
     }
