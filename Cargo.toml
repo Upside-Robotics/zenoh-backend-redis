@@ -18,6 +18,7 @@ assets = [
     ["README.md", "usr/share/doc/zenoh-backend-redis/README.md", "644"],
     ["NOTICE", "usr/share/doc/zenoh-backend-redis/NOTICE", "644"],
     ["config/zenoh-redis.json5", "usr/share/doc/zenoh-backend-redis/examples/zenoh-redis.json5", "644"],
+    ["config/redis.conf", "usr/share/doc/zenoh-backend-redis/examples/redis.conf", "644"],
 ]
 
 [lib]

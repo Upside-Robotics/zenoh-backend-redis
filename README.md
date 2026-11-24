@@ -25,7 +25,7 @@ sudo apt install ./zenoh-backend-redis_1.10.2-1_amd64.deb
 ```
 
 The package installs `/usr/lib/libzenoh_backend_redis.so`, documentation, and
-an example configuration under `/usr/share/doc/zenoh-backend-redis/examples/`.
+example configurations under `/usr/share/doc/zenoh-backend-redis/examples/`.
 It does not install or configure a Redis server, modify the router configuration,
 or restart Zenoh. Configure a Redis volume and storage as described below,
 then restart your router to load the backend. Set the volume's
@@ -149,6 +149,13 @@ For deployments requiring disk persistence, configure Redis persistence and
 recovery appropriately. Redis may still lose acknowledged data depending on
 persistence and failure settings. The backend advertises volatile persistence
 because it cannot guarantee the server's configuration.
+
+An example standalone Redis server configuration is provided in
+[config/redis.conf](config/redis.conf). It uses AOF with an RDB-formatted
+base after AOF rewrites and `appendfsync everysec`, which can lose recent
+writes on a crash. Adjust the memory limit and ensure Redis's working directory
+is writable and on persistent storage. The example listens only on localhost;
+configure authentication and TLS if remote access is needed.
 
 Wildcard discovery scans the Redis database keyspace; see
 [DESIGN.md](DESIGN.md) for performance considerations.
