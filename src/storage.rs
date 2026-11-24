@@ -464,12 +464,24 @@ mod tests {
                 .await?;
         }
         let orphan = mapper.entry(Some(&OwnedKeyExpr::try_from("orphan")?));
+        let timestamp = codec::timestamp_bytes(&Timestamp::new(
+            zenoh::time::NTP64(1),
+            zenoh::time::TimestampId::try_from(1u8)?,
+        ));
         let _: () = redis::cmd("HSET")
             .arg(&orphan)
             .arg("order")
-            .arg("0".repeat(48))
+            .arg(hex(&timestamp))
             .arg("timestamp")
-            .arg(&[1u8; 24][..])
+            .arg(&timestamp)
+            .arg("payload")
+            .arg("")
+            .arg("encoding_id")
+            .arg("0")
+            .arg("has_schema")
+            .arg("0")
+            .arg("encoding_schema")
+            .arg("")
             .query_async(&mut connection)
             .await?;
 
@@ -482,9 +494,17 @@ mod tests {
         let _: () = redis::cmd("HSET")
             .arg(&recreated)
             .arg("order")
-            .arg("0".repeat(48))
+            .arg(hex(&timestamp))
             .arg("timestamp")
-            .arg(&[1u8; 24][..])
+            .arg(&timestamp)
+            .arg("payload")
+            .arg("")
+            .arg("encoding_id")
+            .arg("0")
+            .arg("has_schema")
+            .arg("0")
+            .arg("encoding_schema")
+            .arg("")
             .query_async(&mut connection)
             .await?;
 

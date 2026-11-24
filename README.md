@@ -31,6 +31,10 @@ keys in a quiescent storage.
 Discovery is not a snapshot, so concurrent deletes can race with wildcard puts.
 The storage manager's wildcard history is not recovered after restart; delayed
 wildcard operations across restarts are not guaranteed to preserve ordering.
+In Zenoh 1.10.2, a delayed older put overridden by a wildcard delete may
+instead be stored as an empty value at the delete's timestamp. This is a
+storage-manager issue, tracked upstream in
+[eclipse-zenoh/zenoh#2649](https://github.com/eclipse-zenoh/zenoh/issues/2649).
 
 The `private` volume object accepts an optional Redis ACL `username` and
 `password`, or a password alone. URLs must not contain credentials. `rediss://`
@@ -41,12 +45,20 @@ needs permission for INFO, hash, set, SCAN, SSCAN, DEL and script commands
 used by the backend. A Redis connection and its cluster status are checked
 when each storage is created.
 
+The backend expects Redis to use `maxmemory-policy noeviction`. Eviction can
+remove records or their index independently and cause data loss. The backend
+does not enforce this setting.
+
+Do not modify or delete backend keys directly through Redis, including record
+hashes and the active index. Doing so can make records undiscoverable or cause
+data loss; restrict other writers' access to these keys.
+
 For deployments requiring disk persistence, configure Redis persistence and
-recovery appropriately and use `maxmemory-policy noeviction`. Redis may
-still lose acknowledged data depending on persistence and failure settings.
-The backend advertises volatile persistence because it cannot guarantee the
-server's configuration. Restrict
-other writers' access to the backend's keys. Startup reconciliation scans the
+recovery appropriately. Redis may still lose acknowledged data depending on
+persistence and failure settings. The backend advertises volatile persistence
+because it cannot guarantee the server's configuration.
+
+Startup reconciliation scans the
 shared Redis database keyspace to completion before storage becomes available;
 it logs a warning if the scan takes longer than 10 seconds. Periodic
 reconciliation resumes across intervals, with at most 256 scan commands or

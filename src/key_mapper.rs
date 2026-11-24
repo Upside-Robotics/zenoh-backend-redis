@@ -10,23 +10,52 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     result
 }
 
-fn unhex(encoded: &str) -> Result<Vec<u8>> {
-    if !encoded.len().is_multiple_of(2) {
-        return Err("invalid hex key length".into());
+fn is_unescaped(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/')
+}
+
+fn escape(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+    let mut result = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        if is_unescaped(byte) {
+            result.push(char::from(byte));
+        } else {
+            result.push('%');
+            result.push(char::from(DIGITS[(byte >> 4) as usize]));
+            result.push(char::from(DIGITS[(byte & 15) as usize]));
+        }
     }
-    encoded
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let digit = |c: u8| match c {
-                b'0'..=b'9' => Ok(c - b'0'),
-                b'a'..=b'f' => Ok(c - b'a' + 10),
-                _ => Err("invalid hex key digit"),
-            };
-            Ok((digit(pair[0])? << 4) | digit(pair[1])?)
-        })
-        .collect::<std::result::Result<Vec<_>, &str>>()
-        .map_err(Into::into)
+    result
+}
+
+fn unescape(encoded: &str) -> Result<Vec<u8>> {
+    fn digit(byte: u8) -> Result<u8> {
+        match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'A'..=b'F' => Ok(byte - b'A' + 10),
+            _ => Err("invalid escape digit".into()),
+        }
+    }
+
+    let mut result = Vec::with_capacity(encoded.len());
+    let mut bytes = encoded.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let high = bytes.next().ok_or("incomplete escape")?;
+            let low = bytes.next().ok_or("incomplete escape")?;
+            let decoded = (digit(high)? << 4) | digit(low)?;
+            if is_unescaped(decoded) {
+                return Err("non-canonical escape".into());
+            }
+            result.push(decoded);
+        } else if is_unescaped(byte) {
+            result.push(byte);
+        } else {
+            return Err("invalid unescaped byte".into());
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Debug)]
@@ -39,8 +68,8 @@ impl KeyMapper {
         Self {
             base: format!(
                 "zenoh-redis:v1:{}:{}",
-                hex(prefix.as_bytes()),
-                hex(namespace.as_bytes())
+                escape(prefix.as_bytes()),
+                escape(namespace.as_bytes())
             ),
         }
     }
@@ -56,7 +85,7 @@ impl KeyMapper {
     pub fn entry(&self, key: Option<&OwnedKeyExpr>) -> String {
         match key {
             None => format!("{}:entry:n", self.base),
-            Some(key) => format!("{}:entry:k{}", self.base, hex(key.as_str().as_bytes())),
+            Some(key) => format!("{}:entry:k{}", self.base, escape(key.as_str().as_bytes())),
         }
     }
 
@@ -69,7 +98,7 @@ impl KeyMapper {
             return Ok(None);
         }
         let encoded = suffix.strip_prefix('k').ok_or("invalid entry key")?;
-        let text = String::from_utf8(unhex(encoded)?)?;
+        let text = String::from_utf8(unescape(encoded)?)?;
         Ok(Some(OwnedKeyExpr::try_from(text)?))
     }
 }
@@ -83,10 +112,35 @@ mod tests {
         let m = KeyMapper::new("x:%", "one:two");
         let other = KeyMapper::new("x", "%:one:two");
         let key = OwnedKeyExpr::try_from("a/b%3A".to_owned()).unwrap();
+        assert_eq!(m.active(), "zenoh-redis:v1:x%3A%25:one%3Atwo:active");
+        assert_eq!(
+            m.entry(Some(&key)),
+            "zenoh-redis:v1:x%3A%25:one%3Atwo:entry:ka/b%253A"
+        );
+        assert_eq!(m.entry(None), "zenoh-redis:v1:x%3A%25:one%3Atwo:entry:n");
         assert_eq!(m.decode(&m.entry(None)).unwrap(), None);
         assert_eq!(m.decode(&m.entry(Some(&key))).unwrap(), Some(key));
         assert_ne!(m.active(), other.active());
         assert!(other.decode(&m.entry(None)).is_err());
-        assert!(m.decode(&format!("{}:entry:k0", m.base)).is_err());
+        for suffix in ["k%", "k%2", "k%3a", "k%GG", "k%41", "k:", "k", "x"] {
+            assert!(m.decode(&format!("{}:entry:{suffix}", m.base)).is_err());
+        }
+    }
+
+    #[test]
+    fn escape_round_trips_all_bytes_and_avoids_glob_metacharacters() {
+        let bytes: Vec<u8> = (0..=u8::MAX).collect();
+        let encoded = escape(&bytes);
+        assert_eq!(unescape(&encoded).unwrap(), bytes);
+        assert_eq!(
+            escape(b"AZaz09-_.~/:%*?[]\\"),
+            "AZaz09-_.~/%3A%25%2A%3F%5B%5D%5C"
+        );
+        assert_eq!(escape("café".as_bytes()), "caf%C3%A9");
+        let mapper = KeyMapper::new("*?[]\\", "a:b");
+        assert_eq!(
+            mapper.entries_pattern(),
+            "zenoh-redis:v1:%2A%3F%5B%5D%5C:a%3Ab:entry:*"
+        );
     }
 }

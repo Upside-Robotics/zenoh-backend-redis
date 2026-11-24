@@ -88,9 +88,8 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     let first = format!("{root}/a");
     let sibling = format!("{root}/c");
     let second = format!("{root}/a/b");
-    let encoded = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let base = format!("zenoh-redis:v1:{}:{}", encoded("e2e"), encoded(&token));
-    let first_entry = format!("{base}:entry:k{}", encoded("a"));
+    let base = format!("zenoh-redis:v1:e2e:{token}");
+    let first_entry = format!("{base}:entry:ka");
     let mut conn = redis::Client::open(redis_url.as_str())?
         .get_multiplexed_async_connection()
         .await?;

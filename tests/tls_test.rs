@@ -63,8 +63,7 @@ async fn authenticated_tls_connection() -> Result<(), Box<dyn std::error::Error 
         },
     )?;
     let mut connection = client.get_multiplexed_async_connection().await?;
-    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let base = format!("zenoh-redis:v1:{}:{}", hex("tls-test"), hex(&namespace));
+    let base = format!("zenoh-redis:v1:tls-test:{namespace}");
     let _: usize = redis::cmd("DEL")
         .arg(format!("{base}:entry:n"))
         .arg(format!("{base}:active"))
