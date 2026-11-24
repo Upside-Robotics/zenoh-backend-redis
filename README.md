@@ -107,6 +107,18 @@ cargo test
 ```
 
 Integration tests use `REDIS_URL` if set, otherwise `redis://127.0.0.1:6379`.
+To run the TLS and router end-to-end tests in an isolated container:
+
+```sh
+docker compose -f tests/docker-compose.yml run --rm --build isolated-tests
+```
+
+The fixture uses the official Zenoh 1.10.2 Debian packages on AMD64 or ARM64,
+starts disposable Redis servers, and generates a temporary CA and server
+certificate. No ports are published. Docker and network access to build the
+image are required.
+
+To run these tests against existing fixtures instead:
 For the router end-to-end test, build the library with `cargo build --lib`,
 set `ZENOH_E2E_ROUTER` to a matching `zenohd` binary and
 `ZENOH_E2E_STORAGE_PLUGIN` to its storage-manager shared library, then run

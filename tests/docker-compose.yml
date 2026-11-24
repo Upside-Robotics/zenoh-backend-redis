@@ -4,3 +4,10 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+
+  isolated-tests:
+    profiles: ["isolated"]
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.fixture
+    network_mode: none

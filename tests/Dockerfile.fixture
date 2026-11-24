@@ -1,0 +1,27 @@
+FROM rust:1.97.1-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends redis-server openssl curl unzip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) arch=x86_64; checksum=b6fad30751a230faa8a0c5018814c918891967fd23757c5dc269d6faad950485 ;; \
+      arm64) arch=aarch64; checksum=f048fa6fb089ab7f74ce32ee87b735a0d4cdb7aaca310b1bad45b11d5b920571 ;; \
+      *) echo "Unsupported Debian architecture" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/eclipse-zenoh/zenoh/releases/download/1.10.2/zenoh-1.10.2-${arch}-unknown-linux-gnu-debian.zip" -o /tmp/zenoh.zip; \
+    echo "$checksum  /tmp/zenoh.zip" | sha256sum -c -; \
+    unzip -q /tmp/zenoh.zip -d /tmp/zenoh; \
+    dpkg-deb -x "/tmp/zenoh/zenohd_1.10.2_$(dpkg --print-architecture).deb" /opt/zenoh; \
+    dpkg-deb -x "/tmp/zenoh/zenoh-plugin-storage-manager_1.10.2_$(dpkg --print-architecture).deb" /opt/zenoh; \
+    rm -rf /tmp/zenoh /tmp/zenoh.zip
+
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock build.rs rust-toolchain.toml ./
+COPY src ./src
+COPY tests/end_to_end.rs tests/tls_test.rs ./tests/
+RUN cargo build --locked --lib && cargo test --locked --test end_to_end --test tls_test --no-run
+COPY tests/run-isolated-tests.sh ./tests/
+
+CMD ["sh", "tests/run-isolated-tests.sh"]

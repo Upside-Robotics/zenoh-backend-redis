@@ -13,6 +13,21 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 struct Router(Child);
 
+struct TempConfig(PathBuf);
+
+impl Drop for TempConfig {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_file(&self.0) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "Failed to remove router configuration {:?}: {error}",
+                    self.0
+                );
+            }
+        }
+    }
+}
+
 impl Drop for Router {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -97,7 +112,7 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.local_addr()?.to_string()
     };
-    let config_file: PathBuf = std::env::temp_dir().join(format!("zenoh-redis-{token}.json5"));
+    let config_file = TempConfig(std::env::temp_dir().join(format!("zenoh-redis-{token}.json5")));
     let config = serde_json::json!({
         "mode": "router",
         "listen": {"endpoints": [format!("tcp/{endpoint}")]},
@@ -114,8 +129,8 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
             }
         }
     });
-    fs::write(&config_file, serde_json::to_vec(&config)?)?;
-    let mut router = start_router(&binary, &config_file)?;
+    fs::write(&config_file.0, serde_json::to_vec(&config)?)?;
+    let mut router = start_router(&binary, &config_file.0)?;
     let session = connect(&endpoint, &mut router).await?;
     let mut ready = false;
     for _ in 0..20 {
@@ -184,7 +199,7 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     assert!(!exists);
     drop(session);
     drop(router);
-    let mut router = start_router(&binary, &config_file)?;
+    let mut router = start_router(&binary, &config_file.0)?;
     let session = connect(&endpoint, &mut router).await?;
     let mut recovered = false;
     for _ in 0..20 {
@@ -250,7 +265,7 @@ async fn router_storage_wildcards_and_restart() -> TestResult {
     assert!(!query(&session, &first).await?.contains_key(&first));
     drop(session);
     drop(router);
-    fs::remove_file(config_file)?;
+    fs::remove_file(&config_file.0)?;
 
     let _: usize = redis::cmd("DEL")
         .arg(format!("{base}:entry:n"))
