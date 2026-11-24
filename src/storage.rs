@@ -6,7 +6,6 @@ use std::{
 
 use async_trait::async_trait;
 use redis::{aio::ConnectionManager, AsyncCommands, Script};
-use tokio::task::JoinHandle;
 use zenoh::{
     bytes::{Encoding, ZBytes},
     key_expr::OwnedKeyExpr,
@@ -18,7 +17,6 @@ use zenoh_util::ffi::JsonValue;
 
 use crate::{
     codec,
-    config::StorageOptions,
     key_mapper::{hex, KeyMapper},
     runtime,
 };
@@ -38,40 +36,14 @@ struct State {
 pub struct RedisStorage {
     state: State,
     status: serde_json::Value,
-    cleanup: JoinHandle<()>,
 }
 
 impl RedisStorage {
-    pub fn new(
-        connection: ConnectionManager,
-        mapper: KeyMapper,
-        options: StorageOptions,
-        config: &StorageConfig,
-    ) -> Result<Self> {
-        let cleanup_connection = connection.clone();
-        let cleanup_mapper = mapper.clone();
-        let interval = Duration::from_secs(options.cleanup_interval_seconds);
-        let cleanup = runtime::spawn(async move {
-            let mut progress = Reconciliation::default();
-            loop {
-                tokio::time::sleep(interval).await;
-                let mut connection = cleanup_connection.clone();
-                if let Err(error) = progress
-                    .run_cycle(&mut connection, &cleanup_mapper, RECONCILE_BUDGET)
-                    .await
-                {
-                    tracing::error!(
-                        storage = %cleanup_mapper.active(),
-                        "Redis storage index reconciliation failed: {error}"
-                    );
-                }
-            }
-        })?;
-        Ok(Self {
+    pub fn new(connection: ConnectionManager, mapper: KeyMapper, config: &StorageConfig) -> Self {
+        Self {
             state: State { connection, mapper },
             status: config.to_json_value(),
-            cleanup,
-        })
+        }
     }
 }
 
@@ -116,12 +88,6 @@ impl State {
             3 => Ok(StorageInsertionResult::Deleted),
             _ => Err("unexpected Redis update result".into()),
         }
-    }
-}
-
-impl Drop for RedisStorage {
-    fn drop(&mut self) {
-        self.cleanup.abort();
     }
 }
 

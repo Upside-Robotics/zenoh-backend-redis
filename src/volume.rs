@@ -129,8 +129,6 @@ impl Volume for RedisVolume {
         .await?;
         let mapper = KeyMapper::new(&self.prefix, &options.namespace);
         initialize_indexes(connection.clone(), mapper.clone()).await?;
-        Ok(Box::new(RedisStorage::new(
-            connection, mapper, options, &config,
-        )?))
+        Ok(Box::new(RedisStorage::new(connection, mapper, &config)))
     }
 }

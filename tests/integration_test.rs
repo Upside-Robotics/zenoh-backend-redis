@@ -74,6 +74,18 @@ async fn escaped_names_round_trip_and_reconcile(
         let _: usize = connection.srem(&index, entry).await?;
     }
 
+    assert!(storage.get_all_entries().await?.is_empty());
+    assert_eq!(
+        storage.get(key("a:b"), "").await?[0]
+            .payload
+            .to_bytes()
+            .as_ref(),
+        b"ka%3Ab"
+    );
+    let indexed: bool = connection
+        .sismember(&index, format!("{base}:entry:ka%3Ab"))
+        .await?;
+    assert!(!indexed, "ordinary reads should not restore the index");
     drop(storage);
     let repaired = volume.create_storage(config.storages[0].clone()).await?;
     let entries = repaired.get_all_entries().await?;
@@ -203,7 +215,7 @@ async fn redis_storage_ordering_discovery_and_recovery(
         "volumes": {"redis": {"url": url, "key_prefix": "integration"}},
         "storages": {"test": {
             "key_expr": "test/**", "strip_prefix": "test",
-            "volume": {"id": "redis", "namespace": namespace, "cleanup_interval_seconds": 1}
+            "volume": {"id": "redis", "namespace": namespace}
         }}
     });
     let config = PluginConfig::try_from(("storage_manager", &json))?;

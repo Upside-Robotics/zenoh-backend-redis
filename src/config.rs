@@ -42,12 +42,6 @@ fn default_prefix() -> String {
 #[serde(deny_unknown_fields)]
 pub struct StorageOptions {
     pub namespace: String,
-    #[serde(default = "default_cleanup_interval")]
-    pub cleanup_interval_seconds: u64,
-}
-
-fn default_cleanup_interval() -> u64 {
-    60
 }
 
 impl VolumeOptions {
@@ -83,9 +77,6 @@ impl StorageOptions {
     pub fn validate(&self) -> Result<()> {
         if self.namespace.is_empty() {
             return Err("storage namespace must not be empty".into());
-        }
-        if self.cleanup_interval_seconds == 0 || self.cleanup_interval_seconds > u32::MAX as u64 {
-            return Err("cleanup interval must be positive and fit in u32".into());
         }
         Ok(())
     }
@@ -124,15 +115,13 @@ mod tests {
         }))
         .unwrap();
         assert!(valid.validate().is_ok());
-        for value in [
-            serde_json::json!({"namespace": ""}),
-            serde_json::json!({"namespace": "x", "cleanup_interval_seconds": 0}),
-        ] {
-            assert!(serde_json::from_value::<StorageOptions>(value)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
+        let empty: StorageOptions =
+            serde_json::from_value(serde_json::json!({"namespace": ""})).unwrap();
+        assert!(empty.validate().is_err());
+        assert!(serde_json::from_value::<StorageOptions>(
+            serde_json::json!({"namespace": "x", "cleanup_interval_seconds": 60})
+        )
+        .is_err());
         let unknown = serde_json::json!({"namespace": "x", "unsupported_option": 1});
         assert!(serde_json::from_value::<StorageOptions>(unknown).is_err());
     }

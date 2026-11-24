@@ -48,7 +48,7 @@ unexpected server-side failure after a write requires operator investigation.
 
 ## Index reconciliation
 
-Startup and periodic reconciliation scan the active index and record namespace,
+Startup reconciliation scans the active index and record namespace,
 removing stale members and restoring missing members after partial failures or
 external changes. Repairs are atomic. Before indexing a record, reconciliation
 checks required fields, timestamp ordering and encoding metadata without
@@ -56,15 +56,13 @@ transferring the payload. It can restore discoverability of a complete record,
 but cannot recover lost data or repair a corrupt partial record.
 
 - Startup waits for a complete pass and will print a warning if it takes more than 10 seconds.
-- Periodic cycles perform at most 256 scan calls and per-record script
-  invocations combined. Cursors and unprocessed results are retained for the
-  next cycle, which starts after the configured interval.
-- Errors are logged; failed members are retried on the next complete pass.
 - Redis `SCAN` traverses the database keyspace even with `MATCH`, so the cost
   grows with the shared database. `COUNT` is a hint, not a hard limit on
-  response size or server time; size the interval accordingly.
+  response size or server time.
 
-Reads also remove stale index members after an atomic check.
+There is no periodic reconciliation. Missing index members are not restored by
+a background scan; `get_all_entries` can remove stale members after an atomic
+check.
 
 ## Discovery and deletion
 

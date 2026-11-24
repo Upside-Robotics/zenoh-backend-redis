@@ -21,8 +21,8 @@ timestamping enabled. The configuration is JSON5.
 Each logically distinct storage requires a unique `namespace` within its
 volume's `key_prefix`. Router instances intentionally sharing one logical
 storage must use the same namespace and matching settings, as described below.
-`cleanup_interval_seconds` defaults to 60 seconds. Stored values do not expire
-automatically, and deletes do not leave tombstones. An accepted delete removes
+Stored values do not expire automatically, and deletes do not leave tombstones.
+An accepted delete removes
 the record and its index entry; a delayed older put can recreate it immediately,
 including after restart. Zenoh's in-memory ordering may reject some delayed
 updates, but the backend does not retain delete history.
@@ -58,15 +58,10 @@ recovery appropriately. Redis may still lose acknowledged data depending on
 persistence and failure settings. The backend advertises volatile persistence
 because it cannot guarantee the server's configuration.
 
-Startup reconciliation scans the
-shared Redis database keyspace to completion before storage becomes available;
-it logs a warning if the scan takes longer than 10 seconds. Periodic
-reconciliation resumes across intervals, with at most 256 scan commands or
-per-record script invocations per interval. Redis scan `COUNT` is a hint, so
-an individual scan can return more members than requested; these are retained
-in memory for later intervals. A full pass over a large database can take many
-intervals, delaying stale-index cleanup or repair. The interval is a pause
-after each cycle rather than a fixed-rate schedule.
+Startup reconciliation scans the shared Redis database keyspace to completion
+before storage becomes available; it logs a warning if the scan takes longer
+than 10 seconds. There is no periodic reconciliation, so missing index entries
+are not restored by a background scan during operation.
 
 ## Simple clusters: shared Redis
 
@@ -78,8 +73,8 @@ election and fencing to prevent multiple active writers; this backend does not
 provide either mechanism. Keep storage-manager `replication` disabled.
 
 Configure every router serving the same logical storage with the same Redis
-server and database, `key_prefix`, `namespace`, `key_expr`, `strip_prefix`,
-and compatible cleanup settings. Use a Redis address
+server and database, `key_prefix`, `namespace`, `key_expr`, and `strip_prefix`.
+Use a Redis address
 reachable from every router, not `127.0.0.1` unless Redis is local to each.
 Reserve a different prefix/namespace pair for each distinct logical storage.
 The backend maps stripped keys into the shared namespace; mismatched

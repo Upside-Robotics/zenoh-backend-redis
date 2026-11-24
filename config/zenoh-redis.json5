@@ -21,7 +21,6 @@
           volume: {
             id: "redis",
             namespace: "telemetry",
-            // cleanup_interval_seconds: 60,
           },
         },
       },
