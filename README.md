@@ -12,6 +12,54 @@ The design goal is to allow fast and robust zenoh persistant storage by leveragi
 
 Redis Cluster is rejected at storage creation because the backend does not currently handle cluster redirects, scanning a cluster, or HGET batching on a cluster. Zenoh storage-manager replication is also rejected.
 
+## Debian packages
+
+Download the `.deb` matching your server's architecture (`amd64` or `arm64`)
+from [GitHub Releases](https://github.com/Upside-Robotics/zenoh-backend-redis/releases).
+Packages are built on Debian Bookworm using the pinned Rust toolchain.
+The matching `zenoh-plugin-storage-manager` version must be available from
+your configured APT repositories.
+
+```sh
+sudo apt install ./zenoh-backend-redis_1.10.2-1_amd64.deb
+```
+
+The package installs `/usr/lib/libzenoh_backend_redis.so`, documentation, and
+an example configuration under `/usr/share/doc/zenoh-backend-redis/examples/`.
+It does not install or configure a Redis server, modify the router configuration,
+or restart Zenoh. Configure a Redis volume and storage as described below,
+then restart your router to load the backend. Set the volume's
+`__path__: ["/usr/lib/libzenoh_backend_redis.so"]` if it is not found automatically.
+
+### Publishing a release
+
+The Debian release workflow runs when a `v*` tag is pushed. The tag must be
+`v` followed by the version in `Cargo.toml`. After both architecture builds
+and their unit/Redis integration tests succeed, the workflow creates or updates
+the tag's GitHub Release and attaches both `.deb` files. The TLS and router
+end-to-end tests remain separate; see [Testing](#testing).
+
+```sh
+git tag v1.10.2
+git push origin v1.10.2
+```
+
+The workflow can also be rerun manually from GitHub Actions with an existing
+version tag. It uses GitHub's built-in `GITHUB_TOKEN` with `contents: write`
+only in the publishing job; no custom tokens or Eclipse credentials are required.
+Organization policies must allow the referenced actions and release writes.
+Keep the Rust toolchain, Zenoh dependencies, and Debian storage-manager dependency
+in sync with the intended router build.
+
+To build a package locally on Debian with Rust, `dpkg-dev`, and `pkg-config`:
+
+```sh
+cargo install cargo-deb --version 3.8.0 --locked
+cargo deb --locked
+```
+
+Packages are written to `target/debian/`.
+
 ## Build and configure
 
 Build using the exact Rust toolchain and Zenoh versions used to build the

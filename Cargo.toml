@@ -4,6 +4,21 @@ version = "1.10.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Standalone Redis storage backend for Eclipse Zenoh"
+authors = ["Joseph Duchesne <joseph@upsiderobotics.com>"]
+repository = "https://github.com/Upside-Robotics/zenoh-backend-redis"
+
+[package.metadata.deb]
+maintainer = "Joseph Duchesne <joseph@upsiderobotics.com>"
+copyright = "2026 Upside Robotics"
+section = "net"
+license-file = ["LICENSE", "0"]
+depends = "$auto, zenoh-plugin-storage-manager (= 1.10.2)"
+assets = [
+    ["target/release/libzenoh_backend_redis.so", "usr/lib/libzenoh_backend_redis.so", "644"],
+    ["README.md", "usr/share/doc/zenoh-backend-redis/README.md", "644"],
+    ["NOTICE", "usr/share/doc/zenoh-backend-redis/NOTICE", "644"],
+    ["config/zenoh-redis.json5", "usr/share/doc/zenoh-backend-redis/examples/zenoh-redis.json5", "644"],
+]
 
 [lib]
 name = "zenoh_backend_redis"

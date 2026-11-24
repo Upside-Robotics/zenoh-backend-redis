@@ -1,0 +1,123 @@
+name: Release Debian packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to release (for example, v1.10.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-deb-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} package
+    runs-on: ${{ matrix.runner }}
+    container: rust:1.97.1-bookworm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    services:
+      redis:
+        image: redis:7.4-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://redis:6379
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Install packaging dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends dpkg-dev pkg-config python3
+
+      - name: Validate release version
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("Cargo.toml", "rb") as manifest:
+              version = tomllib.load(manifest)["package"]["version"]
+          expected = f"v{version}"
+          if os.environ["RELEASE_TAG"] != expected:
+              raise SystemExit(f"Release tag must match Cargo.toml: {expected}")
+          PY
+
+      - name: Run unit and Redis integration tests
+        run: cargo test --locked --lib --test integration_test
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --version 3.8.0 --locked
+
+      - name: Build Debian package
+        run: cargo deb --locked
+
+      - name: Inspect Debian package
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          set -- target/debian/*.deb
+          test "$#" -eq 1
+          test "$(dpkg-deb --field "$1" Architecture)" = "$EXPECTED_ARCH"
+          dpkg-deb --info "$1"
+          dpkg-deb --contents "$1"
+          dpkg-deb --fsys-tarfile "$1" | tar -tf - | grep -Fx './usr/lib/libzenoh_backend_redis.so'
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: target/debian/*.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download Debian packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: deb-*
+          path: deb
+          merge-multiple: true
+
+      - name: Publish Debian packages to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: deb/*.deb
+          fail_on_unmatched_files: true
+          generate_release_notes: true
